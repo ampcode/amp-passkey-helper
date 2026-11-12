@@ -1,0 +1,77 @@
+# Checks and builds the helper for x86_64 and aarch64 on every push and pull request. A tag
+# named v<version> (matching Cargo.toml) also publishes a GitHub release with both binaries and
+# their SHA-256 checksums. Ubuntu 22.04 keeps the glibc the binaries need old enough for current
+# distributions.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libdbus-1-dev libudev-dev pkg-config
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --locked --release -- -D warnings
+      - name: Build
+        run: cargo build --locked --release
+      - name: Check the version output
+        run: ./target/release/amp-passkey-helper --version
+      - name: Package
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          name="amp-passkey-helper-$version-${{ matrix.arch }}-linux-gnu"
+          mkdir dist
+          cp target/release/amp-passkey-helper "dist/$name"
+          (cd dist && sha256sum "$name" > "$name.sha256")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: amp-passkey-helper-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check that the tag matches Cargo.toml
+        run: |
+          version=$(sed -nE 's/^version = "(.+)"$/\1/p' Cargo.toml | head -1)
+          [[ "$GITHUB_REF_NAME" == "v$version" ]] || {
+            echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+            exit 1
+          }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

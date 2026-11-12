@@ -1,0 +1,24 @@
+[package]
+name = "amp-passkey-helper"
+version = "0.1.0"
+edition = "2024"
+description = "Runs WebAuthn passkey ceremonies with a phone over the FIDO hybrid (QR code) transport"
+license = "LGPL-2.1-or-later"
+repository = "https://github.com/ampcode/amp-passkey-helper"
+publish = false
+
+[[bin]]
+name = "amp-passkey-helper"
+path = "src/main.rs"
+
+[dependencies]
+libwebauthn = "0.11.0"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+serde_json = "1.0.141"
+tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = true
