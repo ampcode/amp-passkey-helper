@@ -8,7 +8,9 @@
 //! lines on stdout: `{"type":"qr","url":"FIDO:/…","svg":"<svg…>"}`, any number of
 //! `{"type":"status","status":…}`, and last either `{"type":"result","response":{…}}` with the
 //! credential JSON, or `{"type":"error","name":…,"message":…}` with the DOM exception name a
-//! browser would throw. The app cancels a ceremony by killing the process.
+//! browser would throw. A `NotSupportedError` for Bluetooth adds `"reason"`: `bluetooth-off`
+//! when the adapter is powered off, or `bluetooth-unavailable` when there is none. The app
+//! cancels a ceremony by killing the process.
 //!
 //! The caller owns the origin check: this helper signs for whatever origin it is given, as a
 //! browser does for its own pages. Any local process could already reach the phone over
@@ -22,6 +24,9 @@
 
 use std::io::{BufRead, Read};
 
+use btleplug::api::{Central as _, CentralState, Manager as _};
+use btleplug::platform::Manager;
+
 use libwebauthn::UvUpdate;
 use libwebauthn::ops::webauthn::{
 	GetAssertionRequest, JsonFormat, MakeCredentialRequest, OriginValidation, RequestOrigin,
@@ -29,7 +34,6 @@ use libwebauthn::ops::webauthn::{
 };
 use libwebauthn::proto::CtapError;
 use libwebauthn::transport::hybrid::channel::{HybridUxUpdate, PxpUpdate};
-use libwebauthn::transport::hybrid::is_available;
 use libwebauthn::transport::hybrid::qr_code_device::{
 	PxpQrCodeDevice, PxpTransports, QrCodeOperationHint,
 };
@@ -51,6 +55,9 @@ struct Request {
 struct Failure {
 	name: &'static str,
 	message: String,
+	/// Why the ceremony could not start, for a caller that explains it: `bluetooth-off` or
+	/// `bluetooth-unavailable`.
+	reason: Option<&'static str>,
 }
 
 impl Failure {
@@ -58,8 +65,41 @@ impl Failure {
 		Self {
 			name,
 			message: message.into(),
+			reason: None,
 		}
 	}
+
+	fn bluetooth(reason: &'static str, message: &str) -> Self {
+		Self {
+			reason: Some(reason),
+			..Self::new("NotSupportedError", message)
+		}
+	}
+}
+
+/// Fails unless a Bluetooth adapter is powered on. libwebauthn checks only that one exists, and
+/// with it powered off the phone's proximity check waits until the caller gives up.
+async fn require_bluetooth() -> Result<(), Failure> {
+	let unavailable = || {
+		Failure::bluetooth(
+			"bluetooth-unavailable",
+			"No Bluetooth adapter is available. Signing in with a phone needs Bluetooth.",
+		)
+	};
+	let manager = Manager::new().await.map_err(|_| unavailable())?;
+	let adapters = manager.adapters().await.map_err(|_| unavailable())?;
+	if adapters.is_empty() {
+		return Err(unavailable());
+	}
+	for adapter in adapters {
+		if matches!(adapter.adapter_state().await, Ok(CentralState::PoweredOn)) {
+			return Ok(());
+		}
+	}
+	Err(Failure::bluetooth(
+		"bluetooth-off",
+		"Bluetooth is turned off. Signing in with a phone needs Bluetooth.",
+	))
 }
 
 fn emit(event: Value) {
@@ -125,12 +165,7 @@ fn failure_for_ceremony(error: WebAuthnError<impl std::fmt::Display>, create: bo
 }
 
 async fn run(request: Request, demo: bool) -> Result<Value, Failure> {
-	if !is_available().await {
-		return Err(Failure::new(
-			"NotSupportedError",
-			"No Bluetooth adapter is available. Signing in with a phone needs Bluetooth.",
-		));
-	}
+	require_bluetooth().await?;
 	let origin: RequestOrigin = request
 		.origin
 		.as_str()
@@ -243,7 +278,12 @@ async fn main() {
 	match result {
 		Ok(response) => emit(json!({ "type": "result", "response": response })),
 		Err(failure) => {
-			emit(json!({ "type": "error", "name": failure.name, "message": failure.message }));
+			let mut event =
+				json!({ "type": "error", "name": failure.name, "message": failure.message });
+			if let Some(reason) = failure.reason {
+				event["reason"] = json!(reason);
+			}
+			emit(event);
 			std::process::exit(1);
 		}
 	}

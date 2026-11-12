@@ -46,7 +46,9 @@ The helper then writes JSON lines to stdout:
 - The last line is either `result`, with the credential as `AuthenticationResponseJSON` or
   `RegistrationResponseJSON`, or `error`, with the name of the `DOMException` a browser would
   throw (`NotAllowedError`, `NotSupportedError`, `InvalidStateError`, `SecurityError`, or
-  `TypeError`) and a message. The exit status is 0 after `result` and 1 after `error`.
+  `TypeError`) and a message. A `NotSupportedError` about Bluetooth also has a `reason`:
+  `bluetooth-off` when the adapter is powered off, or `bluetooth-unavailable` when the computer
+  has none. The exit status is 0 after `result` and 1 after `error`.
 
 To cancel a ceremony, kill the process.
 

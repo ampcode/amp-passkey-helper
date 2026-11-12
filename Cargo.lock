@@ -45,8 +45,9 @@ dependencies = [
 
 [[package]]
 name = "amp-passkey-helper"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
+ "btleplug",
  "libwebauthn",
  "qrcode",
  "serde_json",
