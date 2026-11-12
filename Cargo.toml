@@ -1,6 +1,6 @@
 [package]
 name = "amp-passkey-helper"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Runs WebAuthn passkey ceremonies with a phone over the FIDO hybrid (QR code) transport"
 license = "LGPL-2.1-or-later"
@@ -16,7 +16,7 @@ btleplug = "0.11.8"
 libwebauthn = "0.11.0"
 qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 serde_json = "1.0.141"
-tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "io-std", "io-util", "sync", "time"] }
 
 [profile.release]
 lto = true

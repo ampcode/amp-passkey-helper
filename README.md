@@ -1,10 +1,17 @@
 # amp-passkey-helper
 
-Runs one WebAuthn passkey ceremony with the user's phone over the FIDO hybrid transport, the
-"use a phone or tablet" QR code flow that browsers offer. The calling app shows the QR code, the
-user scans it with their phone, the phone proves it is nearby over Bluetooth, and the ceremony
-runs through an encrypted tunnel. The phone uses the passkeys it already has: iCloud Keychain,
-Google Password Manager, 1Password, and other passkey providers on the phone.
+Runs one WebAuthn passkey ceremony with the user's phone or a USB security key, the way a browser's
+passkey prompt does.
+
+- **Phone:** the FIDO hybrid transport, the "use a phone or tablet" QR code flow that browsers
+  offer. The calling app shows the QR code, the user scans it with their phone, the phone proves
+  it is nearby over Bluetooth, and the ceremony runs through an encrypted tunnel. The phone uses
+  the passkeys it already has, such as iCloud Keychain, Google Password Manager, or another passkey
+  provider on the phone.
+- **Security key:** at the same time, the helper watches for USB security keys, such as a
+  YubiKey, and blinks each one. A key joins when the user touches it, so a key left plugged in
+  does not take over from the phone. The helper asks the caller for the key's PIN when it needs
+  one.
 
 It exists because Electron on Linux has no passkey prompt. The [Amp](https://ampcode.com) Linux
 app starts this helper for each passkey request. Nothing in it is specific to Amp.
@@ -13,10 +20,12 @@ It is built on [libwebauthn](https://github.com/linux-credentials/libwebauthn).
 
 ## Requirements
 
-- Linux with a Bluetooth adapter, BlueZ, and D-Bus.
-- Internet access on the computer and the phone, for the tunnel.
-- A phone that supports hybrid sign-in: iOS 16 or later, or Android 9 or later with Google Play
-  services.
+- For the phone: Linux with a Bluetooth adapter, BlueZ, and D-Bus; internet access on the
+  computer and the phone, for the tunnel; and a phone that supports hybrid sign-in: iOS 16 or
+  later, or Android 9 or later with Google Play services.
+- For a security key: read and write access to its `/dev/hidraw*` device, the same access
+  browsers and OpenSSH need. systemd's udev rules give it to the logged-in user on current
+  distributions.
 
 ## Protocol
 
@@ -36,25 +45,33 @@ The helper then writes JSON lines to stdout:
 
 ```json
 {"type": "qr", "url": "FIDO:/…", "svg": "<svg …>"}
-{"type": "status", "status": "connecting"}
+{"type": "status", "status": "security-key"}
+{"type": "pin", "attemptsLeft": 8}
+{"type": "status", "status": "touch-key"}
 {"type": "result", "response": {"id": "…", "rawId": "…", "type": "public-key", "response": {…}}}
 ```
 
-- `qr` comes first, with the QR code as a `FIDO:/` URL and as an SVG image.
-- `status` lines report progress: `proximity-check`, `connecting`, `authenticating`, and
-  `connected`.
+- First, `qr` with the QR code as a `FIDO:/` URL and as an SVG image when Bluetooth is ready, or
+  `{"type": "phone-unavailable", "reason": …}` when it is not: `bluetooth-off` when the adapter is
+  powered off, or `bluetooth-unavailable` when the computer has none. Then only a security key can
+  finish the ceremony.
+- `status` lines report progress. From the phone: `proximity-check`, `connecting`,
+  `authenticating`, and `connected`. From a security key: `security-key` once the user touched it
+  to pick it, then `touch-key` when it wants another touch and `uv-retry` when its fingerprint
+  check failed.
+- `pin` asks for the security key's PIN, with the tries left when the key reports them. Answer with
+  a line on stdin, `{"pin": "…"}`. A wrong PIN asks again.
 - The last line is either `result`, with the credential as `AuthenticationResponseJSON` or
   `RegistrationResponseJSON`, or `error`, with the name of the `DOMException` a browser would
-  throw (`NotAllowedError`, `NotSupportedError`, `InvalidStateError`, `SecurityError`, or
-  `TypeError`) and a message. A `NotSupportedError` about Bluetooth also has a `reason`:
-  `bluetooth-off` when the adapter is powered off, or `bluetooth-unavailable` when the computer
-  has none. The exit status is 0 after `result` and 1 after `error`.
+  throw (`NotAllowedError`, `InvalidStateError`, `SecurityError`, or `TypeError`) and a message.
+  The exit status is 0 after `result` and 1 after `error`.
 
-To cancel a ceremony, kill the process.
+Keep stdin open for the whole ceremony: closing it cancels the ceremony. To cancel, kill the
+process or close stdin.
 
 `amp-passkey-helper --version` prints `{"name": "amp-passkey-helper", "version": "…",
-"protocol": 1}`. The protocol number changes only when a change would break callers of the
-previous version.
+"protocol": 2}`. The protocol number changes only when a change would break callers of the
+previous version. Protocol 2 added security keys and the PIN reply on stdin.
 
 ### The caller checks the origin
 
@@ -62,13 +79,15 @@ The helper signs for whatever origin and relying party ID it is given, as a brow
 own pages. Before starting it, the caller must check what a browser checks: that the request comes
 from a page on `origin`, and that the relying party ID is that origin's host or a registrable
 parent domain of it. Without that check, a page could ask for another site's passkey. The helper
-grants no new access by itself: any local program can already talk to a phone over Bluetooth.
+grants no new access by itself: any local program can already talk to a phone over Bluetooth, or
+to a security key over USB.
 
 ## Try it
 
-`amp-passkey-helper --demo` prints a QR code in the terminal and asks the phone to sign a random
-challenge for `https://ampcode.com`. It shows whether Bluetooth, the tunnel, and the phone work on
-a machine, without the calling app.
+`amp-passkey-helper --demo` prints a QR code in the terminal and asks the phone, or a security key
+you touch, to sign a random challenge for `https://ampcode.com`. Type the key's PIN when it asks.
+It shows whether Bluetooth, the tunnel, the phone, and security keys work on a machine, without the
+calling app.
 
 ## Build
 
